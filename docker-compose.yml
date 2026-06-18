@@ -1,0 +1,47 @@
+# rtsp-streaming — 2컨테이너 배포 구성 (backend + frontend)
+#
+# 실행:   docker compose up --build
+# 종료:   docker compose down
+#
+# 환경변수: 같은 디렉토리의 `.env` 를 compose 가 자동으로 읽어 ${VAR} 로 치환.
+#          (없으면 오류. `.env.example` 복사해서 만들어야 함.)
+# 브라우저 접속: http://<서버IP>:${FRONTEND_PORT}  (frontend)
+
+services:
+  # ─────────────────────────────── Backend ───────────────────────────────
+  backend:
+    build:
+      context: ./backend
+    image: rtsp-streaming-backend:dev
+    container_name: rtsp-streaming-backend
+    environment:
+      # SQLite DB 를 named volume 으로 — config.py 기본 경로 대신 override (spec Decision).
+      DATABASE_URL: sqlite:////app/data/ipcam.db
+      # config.py 가 읽는 등록 cap. 비우면 config 기본 16.
+      MAX_IPCAMS: ${MAX_IPCAMS:-16}
+    ports:
+      - "${BACKEND_PORT}:8000"
+    volumes:
+      # SQLite DB 영속화 — named volume (원본 bind-mount `touch deepeye.db` 트랩 회피).
+      - ipcam_db:/app/data
+    restart: unless-stopped
+
+  # ─────────────────────────────── Frontend ──────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Vite 는 빌드 타임에 VITE_* 를 정적 인라인하므로 build.args 로 전달.
+        # 브라우저가 접속할 포트이므로 "호스트에 노출된" backend 포트 값을 넘긴다.
+        VITE_API_PORT: "${BACKEND_PORT}"
+    image: rtsp-streaming-frontend:dev
+    container_name: rtsp-streaming-frontend
+    ports:
+      # 호스트 ${FRONTEND_PORT} → 컨테이너 80 (Nginx 기본 포트, 이미지 빌드시 고정)
+      - "${FRONTEND_PORT}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  ipcam_db:

@@ -1,0 +1,13 @@
+# rtsp-streaming backend deps — opencv(FFMPEG) RTSP 디코딩 + FastAPI + WS-JPEG.
+# 추론(torch/ultralytics/nvidia)·mediamtx·multipart 업로드 전부 비대상 → 제외.
+# 버전은 .sources/ai-monitoring 정본에서 가져옴; alembic/pytest 는 net-new(미고정).
+fastapi==0.135.2
+uvicorn==0.42.0
+sqlalchemy==2.0.48
+pydantic==2.12.5
+python-dotenv==1.2.2
+websockets==16.0
+opencv-python-headless==4.13.0.92
+httpx==0.28.1
+alembic
+pytest
