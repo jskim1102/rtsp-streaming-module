@@ -2,62 +2,60 @@
 
 ![rtsp-streaming 대시보드 — 카메라 CRUD + NxN 실시간 그리드](docs/dashboard.png)
 
-웹서버에서 RTSP 카메라를 등록·수정·삭제하고, 서버(opencv/FFMPEG)가 모든 코덱을 디코딩해 **WS-JPEG 단일 경로**로 브라우저에 스트리밍하는 자기완결 모듈. NxN 자동 그리드 동시뷰 포함. 사용자는 코덱을 고를 필요 없이 웬만한 RTSP 코덱(H.264/H.265/MJPEG 등)이 자동 스트리밍된다.
-
-**mediamtx·HLS·추론(YOLO/pose) 전부 비대상** — 다른 프로젝트가 `ipcam_router` 를 include 해서 갖다쓰는 라이브러리.
+RTSP 카메라를 등록·수정·삭제하고, MediaMTX가 모든 코덱(H.264/H.265/MJPEG 등)을 H.264로 transcode해 브라우저에 WebRTC(WHEP)로 실시간 스트리밍하는 자기완결 모듈. NxN 자동 그리드(1줄 최대 4칸) 동시뷰 포함. 백엔드(FastAPI)는 카메라 CRUD + MediaMTX 제어만 담당 — 영상 디코딩은 안 거쳐 부하가 가볍다.
 
 ---
 
 # 로컬 실행
 
-backend(FastAPI, venv) + frontend(React/Vite) 를 직접 구동. mediamtx 없이 카메라 등록·스트리밍·라이브뷰까지 동작.
+backend(FastAPI) + frontend(React/Vite)를 직접 구동.
 
 ```bash
 # 1. clone
 git clone <repo-URL> rtsp-streaming
 cd rtsp-streaming
 
-# 2. 환경변수 (backend 가 .env 읽음 — 없으면 기본값으로 동작)
+# 2. 환경변수 (backend가 .env 읽음)
 cp backend/.env.example backend/.env
 
 # 3. 백엔드 (venv + alembic 스키마 + uvicorn)
 cd backend
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/alembic upgrade head            # ip_cams 테이블 생성 (스키마 = migration 정본)
+.venv/bin/alembic upgrade head
 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8004
 
 # 4. 프론트엔드 (새 터미널)
 cd ../frontend
 npm install
-npm run dev -- --port 5177                # → http://localhost:5177
+VITE_API_PORT=8004 VITE_MEDIAMTX_WEBRTC_PORT=8893 npm run dev -- --port 5177
 ```
 
-> 프론트는 브라우저에서 백엔드(`http://<host>:8004`)를 **직접** 호출한다. 로컬은 두 포트 다 localhost 라 그대로 동작.
+> 영상 재생·카메라 등록은 MediaMTX가 떠 있어야 동작(브라우저가 MediaMTX에 직접 붙고, 등록도 MediaMTX 성공 확인 후 커밋). 전체 스택은 Docker 권장.
 
 ---
 
 # Docker (전체 스택)
 
-backend + frontend 2컨테이너를 한 번에 기동. backend 컨테이너는 entrypoint 가 `alembic upgrade head` 로 스키마를 적용한 뒤 uvicorn 을 띄운다.
+backend + frontend + MediaMTX 3컨테이너를 한 번에 기동.
 
 ```bash
 # 1. clone
 git clone <repo-URL> rtsp-streaming
 cd rtsp-streaming
 
-# 2. 포트 설정 (compose 가 .env 읽음 — placeholder 라 값 채워야 함)
+# 2. 포트 설정 (compose가 .env 읽음 — placeholder라 값 채워야 함)
 cp .env.example .env
-#   .env 편집: PORT_OFFSET / BACKEND_PORT / FRONTEND_PORT 설정 (예: 4 / 8004 / 5177)
+#   .env 편집: PORT_OFFSET / BACKEND_PORT / FRONTEND_PORT / MEDIAMTX_*_PORT / MEDIAMTX_WEBRTC_HOST
 
 # 3. 빌드 + 기동
 docker compose up -d --build
-# → frontend http://localhost:5177 · backend :8004
+# → frontend http://localhost:5177 · backend :8004 · MediaMTX WHEP :8893
 ```
 
 종료: `docker compose down`
 
-> ⚠️ **스키마/migration 을 바꾼 뒤 재빌드**할 땐 `docker compose down -v` 로 named volume(`ipcam_db`)을 리셋해야 한다. `-v` 없이 내리면 옛 `alembic_version` 이 남아 새 entrypoint 의 `alembic upgrade head` 가 "Can't locate revision" 으로 실패 → backend restart loop.
+> 외부에서 영상이 안 뜨면 `.env`의 `MEDIAMTX_WEBRTC_HOST`에 브라우저가 닿을 IP를 넣어라(LAN·공인, 쉼표구분). 미설정 시 MediaMTX가 컨테이너 내부 IP만 광고해 WebRTC 연결 실패.
 
 ---
 
@@ -65,22 +63,18 @@ docker compose up -d --build
 
 | 서비스 | 포트 |
 |---|---|
-| Frontend | 5177 (컨테이너 80) |
-| Backend (FastAPI · REST + WS) | 8004 (컨테이너 8000) |
+| Frontend | 5177 |
+| Backend (FastAPI) | 8004 |
+| MediaMTX WebRTC / ICE(udp) | 8893 / 8193 |
+| MediaMTX API / RTSP | 10001(loopback) / 8558 |
 
-포트는 `.env` 의 `${BACKEND_PORT}` / `${FRONTEND_PORT}` 로 참조된다(하드코딩 X). 실제 값은 `.env` 에만(gitignore), `.env.example` 에 placeholder.
-
----
-
-## ⚠️ 접속 / 방화벽 (실사용 주의)
-
-브라우저가 **프론트(정적)와 백엔드(REST+WS)를 직접** 호출한다(프록시 없음). 따라서 **두 포트 모두** 외부에서 닿아야 한다:
+외부 접속 시 방화벽·포트포워딩 **4개** 필요(MediaMTX API·RTSP는 내부용 — 열 필요 없음):
 
 ```bash
-sudo ufw allow 5177   # frontend
-sudo ufw allow 8004   # backend (API + WS)
+sudo ufw allow 5177/tcp    # frontend
+sudo ufw allow 8004/tcp    # backend
+sudo ufw allow 8893/tcp    # MediaMTX WebRTC (영상)
+sudo ufw allow 8193/udp    # MediaMTX ICE (udp 주의)
 ```
 
-외부(공인 IP/도메인)에서 접속하려면 라우터 포트포워딩도 **두 포트 다**. 백엔드(8004) 포워딩을 빠뜨리면 프론트는 떠도 카메라 등록/스트리밍이 동작하지 않는다(브라우저→백엔드 호출이 막힘).
-
----
+> 인증 없음 — `:8004`에 닿는 누구나 CRUD 가능. rtsp 비밀번호는 응답에서 `***`로 마스킹된다. 공개 배포 시 리버스 프록시/인증 뒤에 둘 것.

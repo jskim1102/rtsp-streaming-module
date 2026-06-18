@@ -57,6 +57,12 @@ export default function CameraFormModal({ open, editCam, onClose, onSave }: Prop
           <p className="hint">
             형식 — rtsp://[user:pass@]IP:PORT/PATH · 지원 코덱 H.264 / H.265
           </p>
+          {editCam && rtspUrl.includes(":***@") && (
+            <p className="hint">
+              ⚠️ <code>***</code> = 기존 비밀번호 유지. URL·비밀번호를 변경하려면 전체
+              rtsp:// 를 다시 입력하세요(<code>***</code> 가 남아 있으면 URL 변경은 무시됩니다).
+            </p>
+          )}
         </div>
 
         {error && <p className="form-error">{error}</p>}

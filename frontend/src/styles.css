@@ -167,21 +167,27 @@ select {
   overflow: hidden;
 }
 
+/* WHEP placeholder — phase4 WhepPlayer 가 video.srcObject 주입.
+   실 스트림 들어오면 회색 → 검정, 라벨은 위에 떠있음. */
+.grid-cell-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #e5e7eb;
+}
+
 .grid-cell-name {
+  position: relative;
   font-weight: 500;
   color: #374151;
 }
 
 .grid-cell-nosignal {
+  position: relative;
   font-size: 12px;
   color: #9ca3af;
-}
-
-.grid-cell img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  display: block;
 }
 
 /* 페이지 헤더 — 제목 + 등록 버튼 */

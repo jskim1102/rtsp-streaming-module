@@ -5,6 +5,10 @@ RUN npm ci
 COPY . .
 ARG VITE_API_PORT
 RUN test -n "$VITE_API_PORT" || (echo "VITE_API_PORT is required" && exit 1)
+# Vite 가 import.meta.env.VITE_MEDIAMTX_WEBRTC_PORT 를 빌드 시 정적 인라인 → ARG 선언 필수.
+# 미선언이면 compose 가 넘긴 build arg 가 무시되고 whepBase() 기본값(8893)으로 굳음(P1-2).
+ARG VITE_MEDIAMTX_WEBRTC_PORT
+RUN test -n "$VITE_MEDIAMTX_WEBRTC_PORT" || (echo "VITE_MEDIAMTX_WEBRTC_PORT is required" && exit 1)
 RUN npm run build
 
 FROM nginx:alpine

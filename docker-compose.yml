@@ -1,4 +1,4 @@
-# rtsp-streaming — 2컨테이너 배포 구성 (backend + frontend)
+# rtsp-streaming v2 — 3컨테이너 배포 구성 (backend + frontend + mediamtx)
 #
 # 실행:   docker compose up --build
 # 종료:   docker compose down
@@ -19,11 +19,15 @@ services:
       DATABASE_URL: sqlite:////app/data/ipcam.db
       # config.py 가 읽는 등록 cap. 비우면 config 기본 16.
       MAX_IPCAMS: ${MAX_IPCAMS:-16}
+      # mediamtx API — 컨테이너 네트워크 내부 DNS(서비스명). path 등록/삭제/조회.
+      MEDIAMTX_API: http://mediamtx:9997
     ports:
-      - "${BACKEND_PORT}:8000"
+      - "${BACKEND_PORT:?set BACKEND_PORT in .env}:8000"
     volumes:
       # SQLite DB 영속화 — named volume (원본 bind-mount `touch deepeye.db` 트랩 회피).
       - ipcam_db:/app/data
+    depends_on:
+      - mediamtx
     restart: unless-stopped
 
   # ─────────────────────────────── Frontend ──────────────────────────────
@@ -32,15 +36,43 @@ services:
       context: ./frontend
       args:
         # Vite 는 빌드 타임에 VITE_* 를 정적 인라인하므로 build.args 로 전달.
-        # 브라우저가 접속할 포트이므로 "호스트에 노출된" backend 포트 값을 넘긴다.
+        # 브라우저가 접속할 포트이므로 "호스트에 노출된" 포트 값을 넘긴다.
         VITE_API_PORT: "${BACKEND_PORT}"
+        # WHEP 접속 포트 (mediamtx webrtc, 호스트 노출 포트).
+        VITE_MEDIAMTX_WEBRTC_PORT: "${MEDIAMTX_WEBRTC_PORT}"
     image: rtsp-streaming-frontend:dev
     container_name: rtsp-streaming-frontend
     ports:
       # 호스트 ${FRONTEND_PORT} → 컨테이너 80 (Nginx 기본 포트, 이미지 빌드시 고정)
-      - "${FRONTEND_PORT}:80"
+      - "${FRONTEND_PORT:?set FRONTEND_PORT in .env}:80"
     depends_on:
       - backend
+    restart: unless-stopped
+
+  # ─────────────────────────────── MediaMTX ──────────────────────────────
+  # RTSP ingest + 조건부 transcode(runOnDemand) + WebRTC(WHEP) 재생.
+  # `-ffmpeg` 변형 필수 — runOnDemand 가 ffmpeg/ffprobe 를 호출(base 이미지엔 없음).
+  mediamtx:
+    image: bluenviron/mediamtx:1.19.1-ffmpeg
+    container_name: rtsp-streaming-mediamtx
+    environment:
+      # webrtcAdditionalHosts 로 광고할 공인 IP/도메인 (외부접속 #1 gotcha).
+      # mediamtx 는 YAML 안 ${VAR} 를 치환하지 않으므로 MTX_<PARAM> env override 로
+      # 주입한다 (리스트라 콤마구분이지만 호스트 하나면 그대로). 빈 값이면 광고 안 함.
+      MTX_WEBRTCADDITIONALHOSTS: ${MEDIAMTX_WEBRTC_HOST:-}
+    ports:
+      # API (backend 가 path 등록/삭제/조회) — loopback-only.
+      # 무인증 admin API(path add/delete)라 0.0.0.0 노출 X. 백엔드는 내부
+      # docker DNS(mediamtx:9997)로 호출하므로 호스트 publish 는 loopback 만.
+      - "127.0.0.1:${MEDIAMTX_API_PORT:?set MEDIAMTX_API_PORT in .env}:9997"
+      # RTSP (transcode 결과 ingest, 디버깅) — host:container 매핑
+      - "${MEDIAMTX_RTSP_PORT:?set MEDIAMTX_RTSP_PORT in .env}:8554"
+      # WebRTC HTTP(WHEP) — host=container 동일(포트 advertise 미스매치 회피)
+      - "${MEDIAMTX_WEBRTC_PORT:?set MEDIAMTX_WEBRTC_PORT in .env}:8893/tcp"
+      # WebRTC ICE UDP(단일 mux) — host=container 동일
+      - "${MEDIAMTX_ICE_UDP_PORT:?set MEDIAMTX_ICE_UDP_PORT in .env}:8193/udp"
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
     restart: unless-stopped
 
 volumes:

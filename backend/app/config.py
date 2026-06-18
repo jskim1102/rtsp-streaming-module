@@ -11,15 +11,18 @@ load_dotenv(_env_path)
 
 CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "*")
 
-# 환경변수 검증 후 상수 등록
-_raw_jpeg = int(os.getenv("JPEG_QUALITY", "70"))
-JPEG_QUALITY: int = max(1, min(100, _raw_jpeg))
-
 _raw_max_ipcams = int(os.getenv("MAX_IPCAMS", "16"))
 MAX_IPCAMS: int = max(1, min(64, _raw_max_ipcams))
 
-_raw_interval = float(os.getenv("CAPTURE_INTERVAL", "0.03"))
-CAPTURE_INTERVAL: float = max(0.01, min(1.0, _raw_interval))
+# mediamtx API 주소 — 하드코딩 fallback 을 두지 않는다(빈 문자열 = 미설정).
+# Docker compose 가 environment 블록으로 `http://mediamtx:9997` 를 주입하고,
+# 로컬 실행 시에는 backend/.env 에 설정한다. 실제로 호출하는 app.mediamtx 가
+# 미설정이면 명시 에러를 낸다(import 시점엔 raise 안 함 — 순수 import/테스트 허용).
+MEDIAMTX_API: str = os.getenv("MEDIAMTX_API", "")
+
+# WebRTC 외부접속 광고 호스트(공인 IP). mediamtx.yml 의 webrtcAdditionalHosts 로
+# 주입된다. 미설정이면 mediamtx 가 컨테이너 내부 주소만 광고 → 외부에서 영상 안 나옴.
+MEDIAMTX_WEBRTC_HOST: str = os.getenv("MEDIAMTX_WEBRTC_HOST", "")
 
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
@@ -42,10 +45,5 @@ def setup_logging() -> logging.Logger:
 
 logger = setup_logging()
 
-# 검증 결과가 원래 값과 다르면 경고
-if _raw_jpeg != JPEG_QUALITY:
-    logger.warning("JPEG_QUALITY=%d → %d 로 보정됨 (허용 범위: 1~100)", _raw_jpeg, JPEG_QUALITY)
 if _raw_max_ipcams != MAX_IPCAMS:
     logger.warning("MAX_IPCAMS=%d → %d 로 보정됨 (허용 범위: 1~64)", _raw_max_ipcams, MAX_IPCAMS)
-if _raw_interval != CAPTURE_INTERVAL:
-    logger.warning("CAPTURE_INTERVAL=%.3f → %.3f 로 보정됨 (허용 범위: 0.01~1.0)", _raw_interval, CAPTURE_INTERVAL)

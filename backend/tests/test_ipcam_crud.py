@@ -6,6 +6,7 @@ CRUD list/create/update/delete/stats 는 추출 코드의 기존 동작을 고�
 
 import os
 import tempfile
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,14 +15,23 @@ from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture()
-def client():
+def mtx():
+    """ipcam.py 가 호출하는 mediamtx 함수를 mock — 실 httpx 호출 차단."""
+    with patch("app.ipcam.register_stream") as register, \
+         patch("app.ipcam.remove_stream") as remove:
+        register.return_value = True
+        yield {"register": register, "remove": remove}
+
+
+@pytest.fixture()
+def client(mtx):
     """임시 SQLite DB 에 ip_cams 테이블 생성 후 TestClient. 매 테스트 격리."""
     # 임시 DB 파일
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     test_url = f"sqlite:///{path}"
 
-    # 라우터만 단독 마운트 (main.py 전체 배선과 독립 — #21 에서 따로 검증)
+    # 라우터만 단독 마운트 (main.py 전체 배선과 독립 — #37 에서 따로 검증)
     from fastapi import FastAPI
 
     from app.database import Base, get_db
@@ -93,12 +103,68 @@ def test_delete_missing_returns_404(client):
     assert resp.status_code == 404
 
 
-def test_stats_inactive_when_no_capture(client):
+# ─── net-new: mediamtx 사이드이펙트 배선 (test-first) ───
+
+
+def test_create_registers_mediamtx_path(client, mtx):
+    cam = client.post("/api/ipcams", json={"name": "c", "rtsp_url": "rtsp://x/c"}).json()
+    mtx["register"].assert_called_once_with(cam["stream_key"], "rtsp://x/c")
+
+
+def test_update_rtsp_change_reregisters(client, mtx):
+    cam = client.post("/api/ipcams", json={"name": "u", "rtsp_url": "rtsp://x/old"}).json()
+    mtx["register"].reset_mock()
+    mtx["remove"].reset_mock()
+    client.put(f"/api/ipcams/{cam['id']}", json={"name": "u", "rtsp_url": "rtsp://x/new"})
+    mtx["remove"].assert_called_once_with(cam["stream_key"])
+    mtx["register"].assert_called_once_with(cam["stream_key"], "rtsp://x/new")
+
+
+def test_update_no_rtsp_change_no_reregister(client, mtx):
+    cam = client.post("/api/ipcams", json={"name": "u", "rtsp_url": "rtsp://x/same"}).json()
+    mtx["register"].reset_mock()
+    mtx["remove"].reset_mock()
+    # name 만 변경, rtsp 동일 → mediamtx 재등록 안 함
+    client.put(f"/api/ipcams/{cam['id']}", json={"name": "renamed", "rtsp_url": "rtsp://x/same"})
+    mtx["remove"].assert_not_called()
+    mtx["register"].assert_not_called()
+
+
+def test_delete_removes_mediamtx_path(client, mtx):
+    cam = client.post("/api/ipcams", json={"name": "d", "rtsp_url": "rtsp://x/d"}).json()
+    mtx["remove"].reset_mock()
+    client.delete(f"/api/ipcams/{cam['id']}")
+    mtx["remove"].assert_called_once_with(cam["stream_key"])
+
+
+# ─── net-new: stats mediamtx /v3/paths/get 기반 (test-first) ───
+
+
+def test_stats_active_with_readers(client):
     cam = client.post("/api/ipcams", json={"name": "s", "rtsp_url": "rtsp://x/s"}).json()
-    resp = client.get(f"/api/ipcams/{cam['stream_key']}/stats")
+    # mediamtx 가 ready=true + readers 2개 보고
+    with patch("app.ipcam.get_path", return_value={"ready": True, "readers": [{}, {}]}):
+        resp = client.get(f"/api/ipcams/{cam['stream_key']}/stats")
     assert resp.status_code == 200
-    # 캡처 미동작 → active False, source_fps 만 (inference_fps 떼냄)
-    assert resp.json() == {"active": False, "source_fps": 0.0}
+    assert resp.json() == {"active": True, "readers": 2}
+
+
+def test_stats_inactive_when_path_missing(client):
+    cam = client.post("/api/ipcams", json={"name": "s", "rtsp_url": "rtsp://x/s"}).json()
+    # path 없음 → None
+    with patch("app.ipcam.get_path", return_value=None):
+        resp = client.get(f"/api/ipcams/{cam['stream_key']}/stats")
+    assert resp.status_code == 200
+    assert resp.json() == {"active": False, "readers": 0}
+
+
+def test_stats_inactive_when_not_ready(client):
+    cam = client.post("/api/ipcams", json={"name": "s", "rtsp_url": "rtsp://x/s"}).json()
+    # path 존재하나 아직 ready 아님 (source 연결 전)
+    with patch("app.ipcam.get_path", return_value={"ready": False, "readers": []}):
+        resp = client.get(f"/api/ipcams/{cam['stream_key']}/stats")
+    assert resp.status_code == 200
+    assert resp.json() == {"active": False, "readers": 0}
 
 
 # ─── net-new: 16대 cap (test-first) ───
@@ -123,3 +189,73 @@ def test_register_over_cap_returns_409(client):
     resp = client.post("/api/ipcams", json={"name": "over", "rtsp_url": "rtsp://x/over"})
     assert resp.status_code == 409
     assert resp.json()["detail"] == f"최대 {MAX_IPCAMS}대까지 등록할 수 있습니다"
+
+
+# ─── net-new: rtsp:// 스킴 검증 (injection 2중 방어 1단; 셸안전은 shlex.quote) ───
+
+
+def test_create_rejects_non_rtsp_scheme_400(client):
+    resp = client.post("/api/ipcams", json={"name": "bad", "rtsp_url": "http://x/stream"})
+    assert resp.status_code == 400
+    assert client.get("/api/ipcams").json() == []  # DB 오염 없음
+
+
+def test_update_rejects_non_rtsp_scheme_400(client):
+    cam = client.post("/api/ipcams", json={"name": "ok", "rtsp_url": "rtsp://x/ok"}).json()
+    resp = client.put(f"/api/ipcams/{cam['id']}", json={"name": "ok", "rtsp_url": "ftp://x/evil"})
+    assert resp.status_code == 400
+    assert client.get("/api/ipcams").json()[0]["rtsp_url"] == "rtsp://x/ok"  # 기존 유지
+
+
+def test_create_accepts_rtsp_url_with_metachars(client):
+    # rtsp:// 스킴이면 셸 메타문자가 있어도 등록 성공 — shlex.quote 가 중립화.
+    resp = client.post("/api/ipcams", json={"name": "ok", "rtsp_url": "rtsp://u:p@10.0.0.1:554/stream"})
+    assert resp.status_code == 201
+
+
+# ─── net-new: P1-3 mediamtx 등록 실패 시 rollback (성공처럼 보이는 실패 방지) ───
+
+
+def test_create_rolls_back_when_mediamtx_register_fails(client, mtx):
+    """register_stream=False → 503 + DB 미저장(롤백)."""
+    mtx["register"].return_value = False
+    resp = client.post("/api/ipcams", json={"name": "x", "rtsp_url": "rtsp://x/1"})
+    assert resp.status_code == 503
+    assert client.get("/api/ipcams").json() == []  # 롤백되어 흔적 없음
+
+
+def test_create_503_when_mediamtx_api_unset(client, mtx):
+    """MEDIAMTX_API 미설정(register_stream 이 RuntimeError) → 503 + 롤백."""
+    mtx["register"].side_effect = RuntimeError("MEDIAMTX_API 미설정")
+    resp = client.post("/api/ipcams", json={"name": "x", "rtsp_url": "rtsp://x/1"})
+    assert resp.status_code == 503
+    assert client.get("/api/ipcams").json() == []
+
+
+# ─── net-new: P1-4 자격증명 마스킹 ───
+
+
+def test_list_masks_rtsp_credentials(client):
+    """목록 응답의 rtsp_url 비밀번호는 *** 로 마스킹 (평문 노출 차단)."""
+    client.post("/api/ipcams", json={"name": "c", "rtsp_url": "rtsp://admin:secret@10.0.0.5:554/s"})
+    url = client.get("/api/ipcams").json()[0]["rtsp_url"]
+    assert url == "rtsp://admin:***@10.0.0.5:554/s"
+    assert "secret" not in url
+
+
+def test_update_masked_url_preserves_credentials(client, mtx):
+    """수정 시 마스킹된 URL 그대로 들어오면(미수정) 기존 자격증명 유지 + 재등록 안 함."""
+    cam = client.post(
+        "/api/ipcams", json={"name": "c", "rtsp_url": "rtsp://admin:secret@10.0.0.5:554/s"}
+    ).json()
+    masked = cam["rtsp_url"]  # rtsp://admin:***@10.0.0.5:554/s
+    mtx["register"].reset_mock()
+    mtx["remove"].reset_mock()
+
+    # 이름만 변경, URL 은 마스킹된 값 그대로 → 자격증명 보존, mediamtx 재등록 없음
+    resp = client.put(f"/api/ipcams/{cam['id']}", json={"name": "renamed", "rtsp_url": masked})
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "renamed"
+    assert resp.json()["rtsp_url"] == masked  # 여전히 마스킹 (저장된 실값은 secret 그대로)
+    mtx["remove"].assert_not_called()
+    mtx["register"].assert_not_called()

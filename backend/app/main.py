@@ -4,10 +4,10 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import CORS_ORIGINS, logger
-from app.database import init_db
+from app.config import CORS_ORIGINS, MAX_IPCAMS, logger
+from app.database import SessionLocal, init_db
 from app.ipcam import router as ipcam_router
-from app.streaming import manager as stream_manager
+from app.mediamtx import sync_streams
 
 
 @asynccontextmanager
@@ -16,14 +16,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # alembic 이 스키마 정본이지만, 테스트/로컬 첫 실행 편의를 위해 init_db() 유지.
     init_db()
 
-    # 캡처 매니저 기동
-    stream_manager.startup()
+    # DB 에 등록된 카메라를 mediamtx path 로 재등록 (재기동 후 복원).
+    db = SessionLocal()
+    try:
+        sync_streams(db)
+    finally:
+        db.close()
 
     logger.info("RTSP Streaming API 서버 시작")
     yield
-    logger.info("서버 종료 중 — 캡처 리소스 정리")
-    stream_manager.shutdown()
-    logger.info("서버 종료 완료")
+    logger.info("서버 종료")
 
 
 app = FastAPI(title="RTSP Streaming API", lifespan=lifespan)
@@ -43,3 +45,9 @@ app.include_router(ipcam_router)
 @app.get("/api/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/config")
+def get_config() -> dict[str, int]:
+    """프론트가 사용할 런타임 설정 — 등록 cap(MAX_IPCAMS). 프론트 하드코딩 제거(P2-1)."""
+    return {"max_ipcams": MAX_IPCAMS}
