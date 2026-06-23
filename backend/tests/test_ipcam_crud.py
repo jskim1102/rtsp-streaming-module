@@ -259,3 +259,31 @@ def test_update_masked_url_preserves_credentials(client, mtx):
     assert resp.json()["rtsp_url"] == masked  # 여전히 마스킹 (저장된 실값은 secret 그대로)
     mtx["remove"].assert_not_called()
     mtx["register"].assert_not_called()
+
+
+def test_update_masked_password_with_changed_host_applies_change(client, mtx):
+    """버그재현(CEO #56-1): 마스킹된 비번(***)은 유지한 채 host/path 만 바꿔 저장하면
+    그 변경이 DB·mediamtx 에 실제 반영돼야 한다.
+
+    기존 버그: `:***@` 가 들어오면 URL '전체' 를 old 로 되돌려, 함께 바뀐 host/path 까지
+    사라졌다 → "주소 바꿔도 반영 안 됨". 자격증명 카메라(현장 대부분)에서 항상 재현.
+    """
+    cam = client.post(
+        "/api/ipcams", json={"name": "c", "rtsp_url": "rtsp://admin:secret@10.0.0.5:554/s"}
+    ).json()
+    masked = cam["rtsp_url"]
+    assert masked == "rtsp://admin:***@10.0.0.5:554/s"
+    mtx["register"].reset_mock()
+    mtx["remove"].reset_mock()
+
+    # host 만 .5 → .9 로 변경, 비번은 *** 그대로 (사용자가 비번 재입력 안 함)
+    changed = "rtsp://admin:***@10.0.0.9:554/s"
+    resp = client.put(f"/api/ipcams/{cam['id']}", json={"name": "c", "rtsp_url": changed})
+    assert resp.status_code == 200
+    # 응답(마스킹)에 새 host 반영
+    assert resp.json()["rtsp_url"] == "rtsp://admin:***@10.0.0.9:554/s"
+    # mediamtx 재등록: 새 host + 보존된 실제 비번(secret)
+    mtx["remove"].assert_called_once_with(cam["stream_key"])
+    mtx["register"].assert_called_once_with(cam["stream_key"], "rtsp://admin:secret@10.0.0.9:554/s")
+    # DB 재조회 — list 는 마스킹되지만 host 가 .9 로 바뀌어야 함
+    assert client.get("/api/ipcams").json()[0]["rtsp_url"] == "rtsp://admin:***@10.0.0.9:554/s"

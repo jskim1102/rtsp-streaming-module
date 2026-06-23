@@ -12,12 +12,11 @@ interface Props {
   onFps?: (streamKey: string, fps: number) => void;
 }
 
-// 셀 = WhepPlayer(WebRTC) + 카메라 이름 오버레이.
+// 셀 = WhepPlayer(WebRTC). 카메라 식별 라벨 오버레이는 표시하지 않는다(스트리밍 화면 정리).
 function GridCell({ cam, onFps }: { cam: Cam; onFps?: (streamKey: string, fps: number) => void }) {
   return (
     <div className="grid-cell">
       <WhepPlayer streamKey={cam.stream_key} onFps={(fps) => onFps?.(cam.stream_key, fps)} />
-      <span className="grid-cell-name">{cam.name}</span>
     </div>
   );
 }
@@ -32,7 +31,9 @@ export default function CameraGrid({ cams, onFps }: Props) {
   return (
     <div className="grid" style={{ gridTemplateColumns: `repeat(${columns}, 1fr)` }}>
       {cams.map((cam) => (
-        <GridCell key={cam.id} cam={cam} onFps={onFps} />
+        // key 에 rtsp_url 포함 — 주소가 바뀌면 셀을 remount 해 WHEP 를 새 소스로 재연결한다
+        // (수정 후 mediamtx 가 같은 stream_key 로 재등록되므로 streamKey-only effect 로는 갱신 안 됨).
+        <GridCell key={`${cam.id}-${cam.rtsp_url}`} cam={cam} onFps={onFps} />
       ))}
     </div>
   );

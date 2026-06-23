@@ -178,12 +178,6 @@ select {
   background: #e5e7eb;
 }
 
-.grid-cell-name {
-  position: relative;
-  font-weight: 500;
-  color: #374151;
-}
-
 .grid-cell-nosignal {
   position: relative;
   font-size: 12px;

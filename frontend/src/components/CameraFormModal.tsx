@@ -59,8 +59,8 @@ export default function CameraFormModal({ open, editCam, onClose, onSave }: Prop
           </p>
           {editCam && rtspUrl.includes(":***@") && (
             <p className="hint">
-              ⚠️ <code>***</code> = 기존 비밀번호 유지. URL·비밀번호를 변경하려면 전체
-              rtsp:// 를 다시 입력하세요(<code>***</code> 가 남아 있으면 URL 변경은 무시됩니다).
+              ⚠️ <code>***</code> = 기존 비밀번호 유지. 주소·포트·경로는 그대로 수정하면 반영됩니다.
+              비밀번호를 변경하려면 <code>***</code> 를 지우고 새 비밀번호를 입력하세요.
             </p>
           )}
         </div>

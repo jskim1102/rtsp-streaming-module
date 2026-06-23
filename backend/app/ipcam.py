@@ -47,12 +47,39 @@ def mask_rtsp_credentials(url: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
-def _is_masked(url: str) -> bool:
-    """목록에서 받은 마스킹 URL(비밀번호=***)인지 — 수정 시 자격증명 보존 판단."""
+def _restore_masked_password(new_url: str, old_url: str) -> str:
+    """new_url 의 비밀번호가 ***(마스킹)이면 old_url 의 실제 비밀번호로 치환해 돌려준다.
+
+    host/port/path/user/scheme 등 나머지 컴포넌트는 new_url(사용자 수정값)을 보존한다.
+    목록은 비밀번호를 *** 로 마스킹해 내려가므로, 사용자가 비밀번호를 다시 입력하지 않고
+    주소만 바꿔 저장하면 new_url 의 비번이 *** 인 채로 들어온다. 이때 *** 만 기존 실제
+    비번으로 되돌리고 바뀐 주소는 그대로 적용한다(주소 변경이 사라지던 버그의 핵심 수정).
+    마스킹이 아니면(= 사용자가 전체 URL 을 새로 입력) new_url 을 그대로 쓴다.
+    """
     try:
-        return urlsplit(url).password == _MASK
+        new = urlsplit(new_url)
     except ValueError:
-        return False
+        return new_url
+    if new.password != _MASK:
+        return new_url
+    try:
+        old = urlsplit(old_url)
+    except ValueError:
+        return new_url
+    real_pw = old.password or ""
+    host = new.hostname or ""
+    if new.port:
+        host = f"{host}:{new.port}"
+    user = new.username or ""
+    if user and real_pw:
+        netloc = f"{user}:{real_pw}@{host}"
+    elif user:
+        netloc = f"{user}@{host}"
+    elif real_pw:
+        netloc = f":{real_pw}@{host}"
+    else:
+        netloc = host
+    return urlunsplit((new.scheme, netloc, new.path, new.query, new.fragment))
 
 
 def _register_or_fail(stream_key: str, rtsp_url: str) -> bool:
@@ -136,16 +163,17 @@ def create_ipcam(body: IpCamCreate, db: Session = Depends(get_db)) -> IpCam:
 def update_ipcam(cam_id: int, body: IpCamUpdate, db: Session = Depends(get_db)) -> IpCam:
     """IP CAM 수정 + (rtsp 변경 시) mediamtx path 재등록.
 
-    rtsp_url 이 마스킹된 채로(`:***@`) 들어오면(목록에서 받은 값 그대로 = 미수정) 기존
-    URL 을 유지한다 — 자격증명을 *** 로 덮어쓰지 않는다. URL 변경은 전체 rtsp:// 입력 필요.
+    rtsp_url 의 비밀번호가 마스킹된 채로(`:***@`) 들어오면, *** 부분만 기존 실제 비밀번호로
+    되돌리고 host/port/path 등 나머지 변경은 그대로 적용한다 — 비밀번호 재입력 없이 주소만
+    바꿔도 반영된다. 비밀번호를 바꾸려면 *** 를 지우고 새 비밀번호를 입력한다.
     """
     cam = db.query(IpCam).filter(IpCam.id == cam_id).first()
     if not cam:
         raise HTTPException(status_code=404, detail="IP CAM을 찾을 수 없습니다")
 
     old_url = cam.rtsp_url
-    # 마스킹된 URL = 사용자가 URL 을 수정하지 않음 → 기존 자격증명 유지.
-    new_url = old_url if _is_masked(body.rtsp_url) else body.rtsp_url
+    # *** 마스킹된 비밀번호만 기존 실제값으로 복원, 나머지 수정(주소 등)은 보존.
+    new_url = _restore_masked_password(body.rtsp_url, old_url)
     if new_url != old_url:
         _check_rtsp_url(new_url)
 
