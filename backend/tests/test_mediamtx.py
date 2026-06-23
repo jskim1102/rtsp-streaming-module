@@ -2,6 +2,7 @@
 payload + rtsp_url injection 가드.
 """
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -115,3 +116,25 @@ def test_register_accepts_normal_rtsp_url():
         post.return_value = MagicMock(status_code=200)
         # 인증정보 포함 정상 URL 도 통과
         assert mediamtx.register_stream("ipcam-x", "rtsp://user:pass@192.168.0.10:554/h264") is True
+
+
+# ─── P1 로그 평문 비번 누수 차단 (CEO #62) ───
+
+
+def test_register_masks_password_in_log(caplog):
+    """register_stream 의 등록 로그가 비번을 평문으로 남기지 않는다.
+
+    버그: `→ %s` 로 rtsp_url 전체를 찍어 stdout/docker 로그에 비번 평문 노출.
+    / 와 # 를 포함한 비번으로도 로그에 *** 만 남아야 한다.
+    """
+    with patch.object(mediamtx, "MEDIAMTX_API", "http://mtx:9997"), \
+         patch("app.mediamtx.httpx.post") as post:
+        post.return_value = MagicMock(status_code=200)
+        with caplog.at_level(logging.INFO, logger="rtsp-streaming.mediamtx"):
+            mediamtx.register_stream("ipcam-x", "rtsp://admin:pa/ss#word@10.0.0.5:554/cam")
+
+    text = caplog.text
+    assert "ipcam-x" in text  # 등록 로그가 실제로 찍혔는지
+    assert "rtsp://admin:***@10.0.0.5:554/cam" in text  # 마스킹된 형태로
+    for leak in ("pa/ss", "#word", "pa/ss#word"):
+        assert leak not in text, f"로그 비번 평문 누수: {leak!r}"

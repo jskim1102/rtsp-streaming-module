@@ -1,6 +1,5 @@
 import logging
 from datetime import datetime
-from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_serializer
@@ -8,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.config import MAX_IPCAMS
 from app.database import get_db
+from app.masking import _restore_masked_password, mask_rtsp_credentials
 from app.mediamtx import get_path, register_stream, remove_stream
 from app.mediamtx import _validate_rtsp_url
 from app.models import IpCam
@@ -16,8 +16,6 @@ logger = logging.getLogger("rtsp-streaming.ipcam")
 
 router = APIRouter(prefix="/api/ipcams", tags=["ipcam"])
 
-_MASK = "***"
-
 
 def _check_rtsp_url(rtsp_url: str) -> None:
     """rtsp_url 검증 — 위험하면 400 (DB 쓰기 전에 막아 오염·500 방지)."""
@@ -25,61 +23,6 @@ def _check_rtsp_url(rtsp_url: str) -> None:
         _validate_rtsp_url(rtsp_url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-
-def mask_rtsp_credentials(url: str) -> str:
-    """rtsp_url 의 비밀번호를 *** 로 마스킹 — API/UI 노출 시 카메라 자격증명 보호.
-
-    `rtsp://user:pass@host/path` → `rtsp://user:***@host/path`. 비밀번호 없으면 원본.
-    인증 없는 모듈이라 목록/응답에 평문 비밀번호가 새는 것을 막는다(보안 P1-4).
-    """
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return url
-    if not parts.password:
-        return url
-    host = parts.hostname or ""
-    if parts.port:
-        host = f"{host}:{parts.port}"
-    user = parts.username or ""
-    netloc = f"{user}:{_MASK}@{host}" if user else f":{_MASK}@{host}"
-    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
-
-
-def _restore_masked_password(new_url: str, old_url: str) -> str:
-    """new_url 의 비밀번호가 ***(마스킹)이면 old_url 의 실제 비밀번호로 치환해 돌려준다.
-
-    host/port/path/user/scheme 등 나머지 컴포넌트는 new_url(사용자 수정값)을 보존한다.
-    목록은 비밀번호를 *** 로 마스킹해 내려가므로, 사용자가 비밀번호를 다시 입력하지 않고
-    주소만 바꿔 저장하면 new_url 의 비번이 *** 인 채로 들어온다. 이때 *** 만 기존 실제
-    비번으로 되돌리고 바뀐 주소는 그대로 적용한다(주소 변경이 사라지던 버그의 핵심 수정).
-    마스킹이 아니면(= 사용자가 전체 URL 을 새로 입력) new_url 을 그대로 쓴다.
-    """
-    try:
-        new = urlsplit(new_url)
-    except ValueError:
-        return new_url
-    if new.password != _MASK:
-        return new_url
-    try:
-        old = urlsplit(old_url)
-    except ValueError:
-        return new_url
-    real_pw = old.password or ""
-    host = new.hostname or ""
-    if new.port:
-        host = f"{host}:{new.port}"
-    user = new.username or ""
-    if user and real_pw:
-        netloc = f"{user}:{real_pw}@{host}"
-    elif user:
-        netloc = f"{user}@{host}"
-    elif real_pw:
-        netloc = f":{real_pw}@{host}"
-    else:
-        netloc = host
-    return urlunsplit((new.scheme, netloc, new.path, new.query, new.fragment))
 
 
 def _register_or_fail(stream_key: str, rtsp_url: str) -> bool:

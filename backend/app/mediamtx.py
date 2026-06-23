@@ -10,6 +10,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.config import MEDIAMTX_API
+from app.masking import mask_rtsp_credentials
 from app.models import IpCam
 
 logger = logging.getLogger("rtsp-streaming.mediamtx")
@@ -24,14 +25,18 @@ def _validate_rtsp_url(rtsp_url: str) -> None:
     RFC1918/loopback IP 는 거부하지 않는다 — IP 카메라는 LAN(192.168.x)에 있는 게 정상.
     """
     if not (rtsp_url.startswith("rtsp://") or rtsp_url.startswith("rtsps://")):
-        raise ValueError(f"rtsp:// 또는 rtsps:// 스킴이 아닙니다: {rtsp_url!r}")
+        # 에러 메시지(→ 400 응답 본문)에 비번 평문이 새지 않게 마스킹 (P1, CEO #66).
+        raise ValueError(f"rtsp:// 또는 rtsps:// 스킴이 아닙니다: {mask_rtsp_credentials(rtsp_url)!r}")
     # 공백/제어문자 + 셸 메타문자 거부 (denylist). runOnDemand 는 셸 없이 직접 exec 되지만,
     # mediamtx 의 $ 변수치환 + 미래 셸-wrapping 대비 defense-in-depth.
     # allowlist 가 아닌 denylist — `!`/`@`/`%` 등 RTSP 비밀번호의 valid 문자는 허용해야 한다.
     _FORBIDDEN = ("\n", "\r", "\x00", " ", "\t",
                   "$", "`", ";", "|", "&", "(", ")", "{", "}", "<", ">", "\\", "'", '"')
     if any(c in rtsp_url for c in _FORBIDDEN):
-        raise ValueError(f"rtsp_url 에 금지문자(공백/제어/셸메타)가 포함돼 있습니다: {rtsp_url!r}")
+        # 비번에 금지문자가 있어도 평문이 새지 않게 마스킹해서 메시지에 담는다 (P1, CEO #66).
+        raise ValueError(
+            f"rtsp_url 에 금지문자(공백/제어/셸메타)가 포함돼 있습니다: {mask_rtsp_credentials(rtsp_url)!r}"
+        )
 
 
 def _transcode_command(rtsp_url: str) -> str:
@@ -93,7 +98,8 @@ def register_stream(stream_key: str, rtsp_url: str) -> bool:
             timeout=5,
         )
         if resp.status_code in (200, 201):
-            logger.info("mediamtx path 등록: %s → %s", stream_key, rtsp_url)
+            # rtsp_url 은 비번 포함 → 로그엔 마스킹값만 (P1 로그 평문누수 차단, CEO #62).
+            logger.info("mediamtx path 등록: %s → %s", stream_key, mask_rtsp_credentials(rtsp_url))
             return True
         logger.warning("mediamtx 등록 실패: %d %s", resp.status_code, resp.text)
         return False

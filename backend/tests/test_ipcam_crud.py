@@ -287,3 +287,101 @@ def test_update_masked_password_with_changed_host_applies_change(client, mtx):
     mtx["register"].assert_called_once_with(cam["stream_key"], "rtsp://admin:secret@10.0.0.9:554/s")
     # DB 재조회 — list 는 마스킹되지만 host 가 .9 로 바뀌어야 함
     assert client.get("/api/ipcams").json()[0]["rtsp_url"] == "rtsp://admin:***@10.0.0.9:554/s"
+
+
+# ─── net-new: P1 보안 핫픽스 — 예약문자(/ #) 비번 마스킹 누수 (CEO #60) ───
+
+
+def test_list_masks_password_with_reserved_chars_no_leak(client):
+    """버그재현(CEO #60): 비번에 / 나 # 가 있으면 urlsplit 이 비번을 path/fragment 로
+    끊어, 마스킹돼도 비번 일부가 GET 응답에 평문 누수했다(인증 없는 API → 비번 노출).
+    last-@ 마스킹은 예약문자가 있어도 비번 전체를 *** 로 가린다.
+    """
+    pw = "pa/ss#word"
+    client.post(
+        "/api/ipcams", json={"name": "c", "rtsp_url": f"rtsp://admin:{pw}@10.0.0.5:554/cam"}
+    )
+    url = client.get("/api/ipcams").json()[0]["rtsp_url"]
+    assert url == "rtsp://admin:***@10.0.0.5:554/cam"
+    # 비번의 어떤 조각도 응답에 남으면 안 됨 (path/fragment 누수 포함)
+    for frag in (pw, "ss", "word"):
+        assert frag not in url, f"비번 조각 누수: {frag!r} in {url!r}"
+
+
+def test_update_masked_reserved_char_password_changed_host(client, mtx):
+    """/·# 비번 카메라도 *** 유지한 채 주소만 바꿔 저장 → 변경 반영 + 실제 비번 보존(restore 견고)."""
+    cam = client.post(
+        "/api/ipcams", json={"name": "c", "rtsp_url": "rtsp://admin:pa/ss#x@10.0.0.5:554/cam"}
+    ).json()
+    assert cam["rtsp_url"] == "rtsp://admin:***@10.0.0.5:554/cam"
+    mtx["register"].reset_mock()
+    mtx["remove"].reset_mock()
+
+    client.put(
+        f"/api/ipcams/{cam['id']}",
+        json={"name": "c", "rtsp_url": "rtsp://admin:***@10.0.0.7:554/cam"},
+    )
+    # 새 host + 끊기지 않은 실제 비번(pa/ss#x)으로 mediamtx 재등록
+    mtx["register"].assert_called_once_with(
+        cam["stream_key"], "rtsp://admin:pa/ss#x@10.0.0.7:554/cam"
+    )
+    assert client.get("/api/ipcams").json()[0]["rtsp_url"] == "rtsp://admin:***@10.0.0.7:554/cam"
+
+
+def test_mask_restore_roundtrip_special_char_passwords():
+    """mask→restore 가 특수·예약문자 비번을 누수 없이 왕복하는지 (헬퍼 직접 단위).
+
+    수용기준 문자셋: @ : % 공백 ! / # (공백은 API _validate 가 막지만 헬퍼는 견고해야 함).
+    """
+    from app.ipcam import _restore_masked_password, mask_rtsp_credentials
+
+    for pw in ["p@ss", "pa:ss", "p%2Fss", "pa ss", "p!ss", "pa/ss", "pa#ss", "a/b#c?d@e"]:
+        original = f"rtsp://admin:{pw}@10.0.0.5:554/cam"
+        masked = mask_rtsp_credentials(original)
+        assert masked == "rtsp://admin:***@10.0.0.5:554/cam", f"{pw!r} 마스킹 불완전: {masked!r}"
+        assert pw not in masked, f"{pw!r} 평문 누수: {masked!r}"
+        # 마스킹된 값으로(주소 미변경) 저장 → 실제 비번 복원 = 원본
+        restored = _restore_masked_password(masked, original)
+        assert restored == original, f"{pw!r} 복원 실패: {restored!r}"
+
+
+# ─── net-new: P1 — validate 에러 메시지(→400 응답 본문)에 비번 평문 반사 (CEO #66) ───
+
+
+def test_create_forbidden_char_400_masks_password_in_detail(client):
+    """버그재현(CEO #66): 금지문자+비번 url 등록 → 400 응답 본문에 비번 평문 반사됐다.
+    이제 에러 메시지의 url 도 마스킹된다(***). (`;` = 셸메타 금지문자, 비번에 위치)
+    """
+    resp = client.post(
+        "/api/ipcams", json={"name": "x", "rtsp_url": "rtsp://admin:se;cret@10.0.0.5:554/cam"}
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "se;cret" not in detail and "secret" not in detail  # 평문 비번 0
+    assert "***" in detail  # 마스킹된 형태로 들어감
+    assert client.get("/api/ipcams").json() == []  # DB 오염 없음
+
+
+def test_create_bad_scheme_400_masks_password_in_detail(client):
+    """스킴 에러 메시지도 비번 마스킹 (http:// 인데 자격증명 포함된 경우)."""
+    resp = client.post(
+        "/api/ipcams", json={"name": "x", "rtsp_url": "http://admin:secret@10.0.0.5/cam"}
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "secret" not in detail
+    assert "***" in detail
+
+
+def test_update_forbidden_char_400_masks_password_in_detail(client):
+    """update 경로의 validate 에러도 동일하게 비번 마스킹."""
+    cam = client.post(
+        "/api/ipcams", json={"name": "ok", "rtsp_url": "rtsp://admin:good@10.0.0.5:554/s"}
+    ).json()
+    resp = client.put(
+        f"/api/ipcams/{cam['id']}",
+        json={"name": "ok", "rtsp_url": "rtsp://admin:ba|d@10.0.0.9:554/s"},
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "ba|d" not in detail and "***" in detail
