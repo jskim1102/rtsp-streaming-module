@@ -81,18 +81,15 @@ export default function CamerasPage() {
     setFps((prev) => ({ ...prev, [key]: f }));
   }, []);
 
-  async function handleSave(name: string, rtspUrl: string) {
-    setError("");
+  // 등록/수정 — 성공 시 null, 실패 시 에러메시지 반환(모달이 표시 + 로딩상태 제어, #124).
+  async function handleSave(name: string, rtspUrl: string): Promise<string | null> {
     if (editCam) {
       const resp = await fetch(`${apiBase()}/api/ipcams/${editCam.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, rtsp_url: rtspUrl }),
       });
-      if (!resp.ok) {
-        setError("카메라 수정에 실패했습니다.");
-        return;
-      }
+      if (!resp.ok) return "카메라 수정에 실패했습니다.";
     } else {
       const resp = await fetch(`${apiBase()}/api/ipcams`, {
         method: "POST",
@@ -101,15 +98,12 @@ export default function CamerasPage() {
       });
       if (resp.status === 409) {
         const body = await resp.json().catch(() => ({}));
-        setError(body.detail ?? `최대 ${maxIpcams}대까지 등록할 수 있습니다`);
-        return;
+        return body.detail ?? `최대 ${maxIpcams}대까지 등록할 수 있습니다`;
       }
-      if (!resp.ok) {
-        setError("카메라 등록에 실패했습니다.");
-        return;
-      }
+      if (!resp.ok) return "카메라 등록에 실패했습니다.";
     }
     await fetchCams();
+    return null;
   }
 
   async function deleteCam(cam: Cam) {

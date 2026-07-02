@@ -67,19 +67,19 @@ def _restore_masked_password(new_url: str, old_url: str) -> str:
     비번으로 되돌리고 바뀐 주소는 그대로 적용한다.
     마스킹이 아니면(= 사용자가 전체 URL 을 새로 입력) new_url 을 그대로 쓴다.
     비밀번호에 `/ # ? @` 가 있어도 깨지지 않는다(_split_credentials 공통 헬퍼).
+
+    리터럴 *** 비번 구분: 실제 비번이 정확히 `***` 일 수도 있다(드물지만 유효). old 에
+    복원할 실제 비번이 없으면 들어온 `***` 는 마스킹 토큰이 아니라 **사용자가 입력한
+    리터럴 비번** 이므로, 기존값으로 되돌리지 않고(복원할 게 없음) new_url 을 그대로 둔다.
+    (복원은 old 에 실제 비번이 있을 때만 — 그 경우만 *** 가 마스킹 토큰으로 해석된다.)
     """
     new = _split_credentials(new_url)
     if new is None or new[2] != _MASK:
         return new_url  # 자격증명 없음 or 비번이 *** 아님(= 사용자가 전체 새로 입력)
-    prefix, user, _new_pw, rest = new
     old = _split_credentials(old_url)
-    real_pw = old[2] if (old is not None and old[2] is not None) else ""
-    if user and real_pw:
-        userpart = f"{user}:{real_pw}"
-    elif user:
-        userpart = user
-    elif real_pw:
-        userpart = f":{real_pw}"
-    else:
-        return f"{prefix}{rest}"
+    if old is None or old[2] is None:
+        return new_url  # old 에 복원할 실제 비번 없음 → 들어온 *** 는 리터럴 비번, 그대로 둠
+    prefix, user, _new_pw, rest = new
+    real_pw = old[2]
+    userpart = f"{user}:{real_pw}" if user else f":{real_pw}"
     return f"{prefix}{userpart}@{rest}"
