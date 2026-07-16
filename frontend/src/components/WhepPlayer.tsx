@@ -61,7 +61,6 @@ export default function WhepPlayer({ streamKey, onFps }: Props) {
       pc = conn;
 
       conn.addTransceiver("video", { direction: "recvonly" });
-      conn.addTransceiver("audio", { direction: "recvonly" });
 
       conn.ontrack = (ev) => {
         if (videoRef.current) videoRef.current.srcObject = ev.streams[0];

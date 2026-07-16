@@ -104,7 +104,7 @@ def test_register_posts_runondemand_payload():
         assert body["runOnDemandCloseAfter"] == "10s"
 
 
-# ─── rtsp_url injection 가드 (shlex.quote 중립화 + 스킴 검증) ───
+# ─── rtsp_url injection 가드 (셸리스 exec + 스킴/셸메타 denylist) ───
 
 
 def test_register_rejects_non_rtsp_scheme():

@@ -46,7 +46,7 @@ services:
         # 브라우저가 접속할 포트이므로 "호스트에 노출된" 포트 값을 넘긴다.
         VITE_API_PORT: "${BACKEND_PORT}"
         # WHEP 접속 포트 (mediamtx webrtc, 호스트 노출 포트).
-        VITE_MEDIAMTX_WEBRTC_PORT: "${MEDIAMTX_WEBRTC_PORT:-8889}"
+        VITE_MEDIAMTX_WEBRTC_PORT: "${MEDIAMTX_WEBRTC_PORT:?set MEDIAMTX_WEBRTC_PORT in .env}"
         # WHEP 인증 — 브라우저가 viewer 자격증명으로 mediamtx read (빌드타임 인라인).
         VITE_MEDIAMTX_VIEWER_USER: "${MEDIAMTX_VIEWER_USER:-viewer_rtsp_streaming}"
         VITE_MEDIAMTX_VIEWER_PASS: "${MEDIAMTX_VIEWER_PASS:?set MEDIAMTX_VIEWER_PASS in .env}"
@@ -66,6 +66,7 @@ services:
     environment:
       # 외부 WHEP 연결에 광고할 LAN/공인 IP. 비우면 Docker host 밖 ICE 연결이 실패할 수 있다.
       MTX_WEBRTCADDITIONALHOSTS: ${MEDIAMTX_WEBRTC_HOST:-}
+      MTX_WEBRTCLOCALUDPADDRESS: ":${MEDIAMTX_ICE_UDP_PORT:?set MEDIAMTX_ICE_UDP_PORT in .env}"
       # mediamtx.yml authInternalUsers 순서와 강결합: 1=backend, 2=viewer_rtsp_streaming.
       MTX_AUTHINTERNALUSERS_1_USER: ${MEDIAMTX_BACKEND_USER:-backend}
       MTX_AUTHINTERNALUSERS_1_PASS: ${MEDIAMTX_BACKEND_PASS:?set MEDIAMTX_BACKEND_PASS in .env}
@@ -76,10 +77,10 @@ services:
       MTX_AUTHINTERNALUSERS_2_PERMISSIONS_1_PATH: "~^${MEDIAMTX_PATH_PREFIX:-rtsp_streaming}__"
     ports:
       # API 는 backend control plane 용이라 host loopback 에만 노출한다.
-      - "127.0.0.1:9997:9997"
-      - "8554:8554"
-      - "8889:8889/tcp"
-      - "8189:8189/udp"
+      - "127.0.0.1:${MEDIAMTX_API_PORT:?set MEDIAMTX_API_PORT in .env}:9997"
+      - "${MEDIAMTX_RTSP_PORT:?set MEDIAMTX_RTSP_PORT in .env}:8554"
+      - "${MEDIAMTX_WEBRTC_PORT:?set MEDIAMTX_WEBRTC_PORT in .env}:8889/tcp"
+      - "${MEDIAMTX_ICE_UDP_PORT:?set MEDIAMTX_ICE_UDP_PORT in .env}:${MEDIAMTX_ICE_UDP_PORT:?set MEDIAMTX_ICE_UDP_PORT in .env}/udp"
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
     networks:

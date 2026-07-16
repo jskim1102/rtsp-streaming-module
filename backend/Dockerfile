@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# rtsp-streaming backend — FastAPI + OpenCV(FFMPEG) RTSP 디코딩 + WS-JPEG.
+# rtsp-streaming backend — FastAPI control plane + ffprobe 코덱 판별.
 # 베이스: python:3.11-slim (Debian slim), Linux 전용.
 # 의존성: pip + requirements.txt. 추론(torch/ultralytics/CUDA)·mediamtx 비대상.
 
@@ -7,13 +7,11 @@ FROM python:3.11-slim
 
 # -----------------------------------------------------------------------------
 # 시스템 패키지
-#   - libglib2.0-0 : opencv-python-headless 런타임 의존 (GLib)
 #   - ffmpeg       : ffprobe 로 등록 시점 카메라 코덱 감지 (h264=passthrough/else=libx264 결정)
 #   (torch 의 libgomp1, usbutils 는 비대상 — 추론/USB 웹캠 제거)
 # -----------------------------------------------------------------------------
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        libglib2.0-0 \
         ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
@@ -25,9 +23,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # -----------------------------------------------------------------------------
-# 의존성 설치 (레이어 캐시 극대화)
-#   opencv-python-headless 만 설치하므로 X11 의존 opencv-python 덮어쓰기
-#   문제가 없다 → 강제 재설치 정리 블록 불필요.
+# Python 의존성 설치 (레이어 캐시 극대화)
 # -----------------------------------------------------------------------------
 COPY requirements.txt ./
 RUN pip install -r requirements.txt

@@ -371,7 +371,7 @@ def test_concurrent_create_at_cap_never_exceeds_max():
         os.unlink(path)
 
 
-# ─── net-new: rtsp:// 스킴 검증 (injection 2중 방어 1단; 셸안전은 shlex.quote) ───
+# ─── net-new: rtsp:// 스킴 검증 (셸리스 exec + 스킴/셸메타 denylist) ───
 
 
 def test_create_rejects_non_rtsp_scheme_400(client):
@@ -388,7 +388,7 @@ def test_update_rejects_non_rtsp_scheme_400(client):
 
 
 def test_create_accepts_rtsp_url_with_metachars(client):
-    # rtsp:// 스킴이면 셸 메타문자가 있어도 등록 성공 — shlex.quote 가 중립화.
+    # rtsp:// 스킴이고 denylist 문자가 없으면 셸리스 argv 토큰으로 안전하게 등록된다.
     resp = client.post("/api/ipcams", json={"name": "ok", "rtsp_url": "rtsp://u:p@10.0.0.1:554/stream"})
     assert resp.status_code == 201
 
