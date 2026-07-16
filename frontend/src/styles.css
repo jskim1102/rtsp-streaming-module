@@ -36,10 +36,14 @@ body {
   min-width: 0;
 }
 
-/* Viewport units include the scrollbar width. Grid tracks make only the player
-   grid full-bleed without creating horizontal overflow on long pages. */
-.app > .grid {
+/* Viewport units include the scrollbar width. Grid tracks let the player grid
+   and its divider span wider without creating horizontal overflow. */
+.app > .grid,
+.app > .grid-divider {
   grid-column: full;
+  max-width: 1600px;
+  margin-inline: auto;
+  width: 100%;
 }
 
 h1 {
@@ -290,9 +294,10 @@ select {
 }
 
 /* 그리드 섹션 */
-.grid-heading {
-  margin: 28px 0 12px;
-  font-size: 16px;
+.grid-divider {
+  margin-block: 28px 12px;
+  border: 0;
+  border-top: 1px solid #d1d5db;
 }
 
 .grid-empty {

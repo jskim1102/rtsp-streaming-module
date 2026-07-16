@@ -220,7 +220,7 @@ export default function CamerasPage() {
         </tbody>
       </table>
 
-      <h2 className="grid-heading">실시간 그리드</h2>
+      <hr className="grid-divider" />
       <CameraGrid cams={cams} onFps={handleFps} epochs={playerEpoch} />
 
       <CameraFormModal
