@@ -142,6 +142,36 @@ def test_update_no_rtsp_change_no_reregister(client, mtx):
     mtx["remove"].assert_not_called()
 
 
+def test_update_patch_fails_falls_back_to_register(client, mtx):
+    """PATCH 실패(mediamtx path 소실 등) 시 register 폴백으로 재생성 → 200 + 저장.
+
+    mediamtx 가 독립 재시작돼 path 가 사라지면 update_stream(PATCH)이 404(False)를 낸다.
+    이때 register_stream 폴백이 path 를 재생성하므로 수정이 카메라를 복구하고 저장된다.
+    """
+    cam = client.post("/api/ipcams", json={"name": "u", "rtsp_url": "rtsp://x/old"}).json()
+    mtx["update"].reset_mock()
+    mtx["register"].reset_mock()
+    mtx["update"].return_value = False  # PATCH 실패(path 부재)
+    mtx["register"].return_value = True  # register 폴백 성공
+    resp = client.put(f"/api/ipcams/{cam['id']}", json={"name": "u", "rtsp_url": "rtsp://x/new"})
+    assert resp.status_code == 200
+    mtx["update"].assert_called_once_with(cam["stream_key"], "rtsp://x/new")
+    mtx["register"].assert_called_once_with(cam["stream_key"], "rtsp://x/new")
+    assert client.get("/api/ipcams").json()[0]["rtsp_url"] == "rtsp://x/new"
+
+
+def test_update_503_when_patch_and_register_both_fail(client, mtx):
+    """PATCH·register 폴백 둘 다 실패 → 503 + DB 롤백(변경 미저장)."""
+    cam = client.post("/api/ipcams", json={"name": "u", "rtsp_url": "rtsp://x/old"}).json()
+    mtx["update"].reset_mock()
+    mtx["register"].reset_mock()
+    mtx["update"].return_value = False
+    mtx["register"].return_value = False
+    resp = client.put(f"/api/ipcams/{cam['id']}", json={"name": "u", "rtsp_url": "rtsp://x/new"})
+    assert resp.status_code == 503
+    assert client.get("/api/ipcams").json()[0]["rtsp_url"] == "rtsp://x/old"  # 롤백 → 기존 유지
+
+
 def test_delete_removes_mediamtx_path(client, mtx):
     cam = client.post("/api/ipcams", json={"name": "d", "rtsp_url": "rtsp://x/d"}).json()
     mtx["remove"].reset_mock()

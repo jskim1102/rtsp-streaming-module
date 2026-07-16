@@ -22,9 +22,24 @@ body {
 
 /* 레이아웃 */
 .app {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 24px 16px;
+  display: grid;
+  grid-template-columns:
+    [full-start] minmax(16px, 1fr)
+    [content-start] minmax(0, 1068px)
+    [content-end] minmax(16px, 1fr)
+    [full-end];
+  padding: 24px 0;
+}
+
+.app > * {
+  grid-column: content;
+  min-width: 0;
+}
+
+/* Viewport units include the scrollbar width. Grid tracks make only the player
+   grid full-bleed without creating horizontal overflow on long pages. */
+.app > .grid {
+  grid-column: full;
 }
 
 h1 {

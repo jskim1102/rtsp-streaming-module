@@ -18,6 +18,15 @@ interface Stat {
 
 const MAX_IPCAMS_FALLBACK = 16; // spec F4 — /api/config 로딩 전 기본값. 실제 cap 은 백엔드 env.
 
+// 실패 응답에서 backend detail(비어있지 않은 문자열)만 노출, 없거나 비문자열·공백이면 fallback.
+// detail 은 <p>{error}</p> 로 렌더되므로 문자열 보장 필수 — 객체/배열 detail 렌더 크래시 차단.
+async function errorDetail(resp: Response, fallback: string): Promise<string> {
+  // .catch(null) + ?. — 본문이 JSON `null` 이거나 파싱 실패여도 안전(널 역참조 크래시 차단).
+  const body = await resp.json().catch(() => null);
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  return typeof detail === "string" && detail.trim() ? detail : fallback;
+}
+
 export default function CamerasPage() {
   const [cams, setCams] = useState<Cam[]>([]);
   const [stats, setStats] = useState<Record<string, Stat>>({});
@@ -28,6 +37,9 @@ export default function CamerasPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editCam, setEditCam] = useState<Cam | null>(null);
   const [error, setError] = useState("");
+  // 카메라별 remount epoch — RTSP 변경 편집 성공 시 bump(→ CameraGrid key 변경 → 셀 remount).
+  // 응답 rtsp_url 은 마스킹(:***@)이라 비번-only 변경을 서버 응답으론 못 잡으므로 이 신호를 쓴다.
+  const [playerEpoch, setPlayerEpoch] = useState<Record<number, number>>({});
 
   const fetchCams = useCallback(async () => {
     const resp = await fetch(`${apiBase()}/api/ipcams`);
@@ -84,12 +96,23 @@ export default function CamerasPage() {
   // 등록/수정 — 성공 시 null, 실패 시 에러메시지 반환(모달이 표시 + 로딩상태 제어, #124).
   async function handleSave(name: string, rtspUrl: string): Promise<string | null> {
     if (editCam) {
+      // 사용자가 입력한 url 이 기존값(마스킹 :***@ 포함)과 다르면 스트림 변경(비번·주소 등).
+      // 이름만 바꾼 편집은 여기서 false → remount 하지 않는다(불필요한 WHEP 재연결/깜빡임 방지).
+      const urlChanged = rtspUrl !== editCam.rtsp_url;
       const resp = await fetch(`${apiBase()}/api/ipcams/${editCam.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, rtsp_url: rtspUrl }),
       });
-      if (!resp.ok) return "카메라 수정에 실패했습니다.";
+      if (!resp.ok) {
+        // 백엔드 detail(예: 마스킹 *** 인 채 주소 변경 → 실비번 재입력 안내)을 그대로 노출.
+        return await errorDetail(resp, "카메라 수정에 실패했습니다.");
+      }
+      // RTSP 변경 성공 시에만 셀 remount 신호 bump(비번-only 편집도 새 자격증명으로 WHEP 재연결).
+      if (urlChanged) {
+        const id = editCam.id;
+        setPlayerEpoch((prev) => ({ ...prev, [id]: (prev[id] ?? 0) + 1 }));
+      }
     } else {
       const resp = await fetch(`${apiBase()}/api/ipcams`, {
         method: "POST",
@@ -97,10 +120,10 @@ export default function CamerasPage() {
         body: JSON.stringify({ name, rtsp_url: rtspUrl }),
       });
       if (resp.status === 409) {
-        const body = await resp.json().catch(() => ({}));
-        return body.detail ?? `최대 ${maxIpcams}대까지 등록할 수 있습니다`;
+        return await errorDetail(resp, `최대 ${maxIpcams}대까지 등록할 수 있습니다`);
       }
-      if (!resp.ok) return "카메라 등록에 실패했습니다.";
+      // 409 외 실패(예: 503 mediamtx 미가용, 400 URL 검증)도 backend detail 노출 — PUT 경로와 일관.
+      if (!resp.ok) return await errorDetail(resp, "카메라 등록에 실패했습니다.");
     }
     await fetchCams();
     return null;
@@ -198,7 +221,7 @@ export default function CamerasPage() {
       </table>
 
       <h2 className="grid-heading">실시간 그리드</h2>
-      <CameraGrid cams={cams} onFps={handleFps} />
+      <CameraGrid cams={cams} onFps={handleFps} epochs={playerEpoch} />
 
       <CameraFormModal
         open={formOpen}

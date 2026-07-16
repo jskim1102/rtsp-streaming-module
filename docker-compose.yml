@@ -1,4 +1,4 @@
-# rtsp-streaming v2 — 2컨테이너(backend + frontend) + 공유 mediamtx(harness-shared-mediamtx, 외부망, CEO #115)
+# rtsp-streaming v2 — standalone 3컨테이너(backend + frontend + mediamtx)
 #
 # 실행:   docker compose up --build
 # 종료:   docker compose down
@@ -19,12 +19,12 @@ services:
       DATABASE_URL: sqlite:////app/data/ipcam.db
       # config.py 가 읽는 등록 cap. 비우면 config 기본 16.
       MAX_IPCAMS: ${MAX_IPCAMS:-16}
-      # 공유 mediamtx API — docker DNS(harness-shared-mtx 망의 서비스명). path 등록/삭제/조회 (CEO #115).
-      MEDIAMTX_API: http://harness-shared-mediamtx:9997
+      # standalone mediamtx API. 별도 인스턴스를 쓸 때만 .env 로 override.
+      MEDIAMTX_API: ${MEDIAMTX_API:-http://mediamtx:9997}
       # path 네임스페이스 prefix — stream_key 가 `rtsp_streaming__ipcam-*` 로 생성(프로젝트간 교차열람 차단).
-      MEDIAMTX_PATH_PREFIX: rtsp_streaming
-      # 공유 mediamtx 인증 — backend user(공유 비번). API/publish/read.
-      MEDIAMTX_BACKEND_USER: backend
+      MEDIAMTX_PATH_PREFIX: ${MEDIAMTX_PATH_PREFIX:-rtsp_streaming}
+      # mediamtx 인증 — backend user. API/publish/read.
+      MEDIAMTX_BACKEND_USER: ${MEDIAMTX_BACKEND_USER:-backend}
       MEDIAMTX_BACKEND_PASS: ${MEDIAMTX_BACKEND_PASS:?set MEDIAMTX_BACKEND_PASS in .env}
     ports:
       - "${BACKEND_PORT:?set BACKEND_PORT in .env}:8000"
@@ -32,7 +32,9 @@ services:
       # SQLite DB 영속화 — named volume (원본 bind-mount `touch deepeye.db` 트랩 회피).
       - ipcam_db:/app/data
     networks:
-      - harness-shared-mtx
+      - rtsp-streaming
+    depends_on:
+      - mediamtx
     restart: unless-stopped
 
   # ─────────────────────────────── Frontend ──────────────────────────────
@@ -44,9 +46,9 @@ services:
         # 브라우저가 접속할 포트이므로 "호스트에 노출된" 포트 값을 넘긴다.
         VITE_API_PORT: "${BACKEND_PORT}"
         # WHEP 접속 포트 (mediamtx webrtc, 호스트 노출 포트).
-        VITE_MEDIAMTX_WEBRTC_PORT: "${MEDIAMTX_WEBRTC_PORT}"
-        # WHEP 인증 — 브라우저가 이 프로젝트 viewer 자격증명으로 공유 mediamtx read (빌드타임 인라인).
-        VITE_MEDIAMTX_VIEWER_USER: "viewer_rtsp_streaming"
+        VITE_MEDIAMTX_WEBRTC_PORT: "${MEDIAMTX_WEBRTC_PORT:-8889}"
+        # WHEP 인증 — 브라우저가 viewer 자격증명으로 mediamtx read (빌드타임 인라인).
+        VITE_MEDIAMTX_VIEWER_USER: "${MEDIAMTX_VIEWER_USER:-viewer_rtsp_streaming}"
         VITE_MEDIAMTX_VIEWER_PASS: "${MEDIAMTX_VIEWER_PASS:?set MEDIAMTX_VIEWER_PASS in .env}"
     image: rtsp-streaming-frontend:dev
     container_name: rtsp-streaming-frontend
@@ -57,11 +59,36 @@ services:
       - backend
     restart: unless-stopped
 
+  # ─────────────────────────────── MediaMTX ──────────────────────────────
+  mediamtx:
+    image: bluenviron/mediamtx:1.19.1-ffmpeg
+    container_name: rtsp-streaming-mediamtx
+    environment:
+      # 외부 WHEP 연결에 광고할 LAN/공인 IP. 비우면 Docker host 밖 ICE 연결이 실패할 수 있다.
+      MTX_WEBRTCADDITIONALHOSTS: ${MEDIAMTX_WEBRTC_HOST:-}
+      # mediamtx.yml authInternalUsers 순서와 강결합: 1=backend, 2=viewer_rtsp_streaming.
+      MTX_AUTHINTERNALUSERS_1_USER: ${MEDIAMTX_BACKEND_USER:-backend}
+      MTX_AUTHINTERNALUSERS_1_PASS: ${MEDIAMTX_BACKEND_PASS:?set MEDIAMTX_BACKEND_PASS in .env}
+      MTX_AUTHINTERNALUSERS_2_USER: ${MEDIAMTX_VIEWER_USER:-viewer_rtsp_streaming}
+      MTX_AUTHINTERNALUSERS_2_PASS: ${MEDIAMTX_VIEWER_PASS:?set MEDIAMTX_VIEWER_PASS in .env}
+      # path prefix override 도 viewer 권한 경계에 함께 반영한다.
+      MTX_AUTHINTERNALUSERS_2_PERMISSIONS_0_PATH: "~^${MEDIAMTX_PATH_PREFIX:-rtsp_streaming}__"
+      MTX_AUTHINTERNALUSERS_2_PERMISSIONS_1_PATH: "~^${MEDIAMTX_PATH_PREFIX:-rtsp_streaming}__"
+    ports:
+      # API 는 backend control plane 용이라 host loopback 에만 노출한다.
+      - "127.0.0.1:9997:9997"
+      - "8554:8554"
+      - "8889:8889/tcp"
+      - "8189:8189/udp"
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    networks:
+      - rtsp-streaming
+    restart: unless-stopped
+
 networks:
-  # 공유 mediamtx 망(harness-shared-mtx) — infra 가 생성, 여기선 외부 참조. backend 만 참여.
-  # frontend 는 브라우저가 직접 공유 mediamtx WebRTC(host:8889)에 닿으므로 망 불참.
-  harness-shared-mtx:
-    external: true
+  # Compose 가 프로젝트별 내부망을 자체 생성한다. 외부 harness 인프라가 필요 없다.
+  rtsp-streaming:
 
 volumes:
   ipcam_db:

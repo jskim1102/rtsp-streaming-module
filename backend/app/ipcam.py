@@ -194,7 +194,10 @@ def update_ipcam(cam_id: int, body: IpCamUpdate, db: Session = Depends(get_db)) 
     # 새 url 로 그 자리에서 바뀌고, 실패 시 mediamtx 가 기존 config 를 그대로 보존하므로 old
     # path 가 살아있다(카메라 암전 0). 실패면 DB 도 롤백 → 503.
     if new_url != old_url:
-        if not _update_or_fail(cam.stream_key, new_url):
+        # PATCH(부분 갱신) 우선 시도. 실패(예: mediamtx 가 독립 재시작돼 path 가 사라진 뒤
+        # 수정 → PATCH 404)면 register 로 재생성 폴백(원본 deepeye remove+add 동작 복원) —
+        # 그래야 path 부재 상태에서도 수정이 카메라를 복구한다. 둘 다 실패면 DB 롤백 → 503.
+        if not _update_or_fail(cam.stream_key, new_url) and not _register_or_fail(cam.stream_key, new_url):
             db.rollback()
             raise HTTPException(
                 status_code=503,
