@@ -67,6 +67,8 @@ services:
       # 외부 WHEP 연결에 광고할 LAN/공인 IP. 비우면 Docker host 밖 ICE 연결이 실패할 수 있다.
       MTX_WEBRTCADDITIONALHOSTS: ${MEDIAMTX_WEBRTC_HOST:-}
       MTX_WEBRTCLOCALUDPADDRESS: ":${MEDIAMTX_ICE_UDP_PORT:?set MEDIAMTX_ICE_UDP_PORT in .env}"
+      # UDP 가 막힌 외부망(회사/카페 방화벽, 라우터 UDP 포워딩 불가)용 ICE TCP fallback — 같은 포트의 tcp.
+      MTX_WEBRTCLOCALTCPADDRESS: ":${MEDIAMTX_ICE_UDP_PORT:?set MEDIAMTX_ICE_UDP_PORT in .env}"
       # mediamtx.yml authInternalUsers 순서와 강결합: 1=backend, 2=viewer_rtsp_streaming.
       MTX_AUTHINTERNALUSERS_1_USER: ${MEDIAMTX_BACKEND_USER:-backend}
       MTX_AUTHINTERNALUSERS_1_PASS: ${MEDIAMTX_BACKEND_PASS:?set MEDIAMTX_BACKEND_PASS in .env}
@@ -81,6 +83,7 @@ services:
       - "${MEDIAMTX_RTSP_PORT:?set MEDIAMTX_RTSP_PORT in .env}:8554"
       - "${MEDIAMTX_WEBRTC_PORT:?set MEDIAMTX_WEBRTC_PORT in .env}:8889/tcp"
       - "${MEDIAMTX_ICE_UDP_PORT:?set MEDIAMTX_ICE_UDP_PORT in .env}:${MEDIAMTX_ICE_UDP_PORT:?set MEDIAMTX_ICE_UDP_PORT in .env}/udp"
+      - "${MEDIAMTX_ICE_UDP_PORT:?set MEDIAMTX_ICE_UDP_PORT in .env}:${MEDIAMTX_ICE_UDP_PORT:?set MEDIAMTX_ICE_UDP_PORT in .env}/tcp"
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
     networks:

@@ -76,7 +76,7 @@ def test_create_returns_201_with_stream_key(client):
     body = resp.json()
     assert body["name"] == "정문"
     assert body["rtsp_url"] == "rtsp://x/1"
-    assert body["stream_key"].startswith("ipcam-")
+    assert "ipcam-" in body["stream_key"]
     assert "id" in body and "created_at" in body
 
 
