@@ -12,7 +12,8 @@ services:
   backend:
     build:
       context: ./backend
-    image: rtsp-streaming-backend:dev
+    # 공개 이미지 — .env 값을 굽지 않으므로 ghcr.io 에 미리 올려 클라이언트가 받는다 (docs/release.md §8).
+    image: ghcr.io/jskim1102/rtsp-streaming-backend:latest
     container_name: rtsp-streaming-backend
     environment:
       # SQLite DB 를 named volume 으로 — config.py 기본 경로 대신 override (spec Decision).
@@ -35,6 +36,13 @@ services:
       - rtsp-streaming
     depends_on:
       - mediamtx
+    # setup 의 `docker compose up --wait` 가 기동 완료를 판정. slim 이미지엔 curl 이 없어 python 으로 호출.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   # ─────────────────────────────── Frontend ──────────────────────────────
@@ -57,6 +65,13 @@ services:
       - "${FRONTEND_PORT:?set FRONTEND_PORT in .env}:80"
     depends_on:
       - backend
+    # nginx 응답 확인 — alpine 의 busybox wget 사용.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
   # ─────────────────────────────── MediaMTX ──────────────────────────────
