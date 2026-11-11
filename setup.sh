@@ -42,8 +42,9 @@ port_busy() {
   if command -v ss >/dev/null 2>&1; then
     ss -Htuln 2>/dev/null | awk '{print $5}' | grep -E "[:.]$1\$" >/dev/null && return 0
   elif command -v lsof >/dev/null 2>&1; then
-    lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1 && return 0
-    lsof -nP -iUDP:"$1" >/dev/null 2>&1 && return 0
+    # busybox lsof(alpine)는 옵션을 무시하고 늘 0 을 돌려준다 → 모든 포트가 '사용 중' 이 되어 무한 반복했다.
+    # 반환값 말고 출력에 그 포트가 실제로 있는지 본다.
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN -iUDP:"$1" 2>/dev/null | grep -E "[:.]$1( |\$)" >/dev/null && return 0
   fi
   return 1
 }
@@ -77,8 +78,10 @@ for key in $keys; do
     *_PORT)
       # 빈 칸이거나, 방금 복사한 기본값이 이 PC 에서 이미 쓰이는 중이면 빈 포트를 고른다
       if [ -z "$v" ] || { [ $fresh = 1 ] && port_busy "$v"; }; then
+        tries=0
         while port_busy "$next" || case "$used" in *" $next "*) true ;; *) false ;; esac; do
-          next=$((next + 1))
+          next=$((next + 1)); tries=$((tries + 1))
+          [ $tries -lt 2000 ] || die "빈 포트를 찾지 못했어요 (2000개가 모두 사용 중으로 보임) — 개발자에게 알려 주세요."
         done
         env_set "$key" "$next"; used="$used$next "; ok "$key=$next"; next=$((next + 1))
       fi ;;
